@@ -151,9 +151,52 @@ static bool validate_ipv4(const std::string &ip)
     return regex_match(ip, ipv4_regex);
 }
 
+static bool validate_hostname(const std::string &host)
+{
+    /* RFC 1123 hostname: labels of 1-63 alphanumerics/hyphens, separated by dots */
+    std::regex hostname_regex(
+        "[A-Za-z0-9]([A-Za-z0-9\\-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9\\-]{0,61}[A-Za-z0-9])?)*");
+    return std::regex_match(host, hostname_regex);
+}
+
 static bool validate_ip(const std::string &ip)
 {
-    return validate_ipv4(ip) || validate_ipv6(ip);
+    return validate_ipv4(ip) || validate_ipv6(ip) || validate_hostname(ip);
+}
+
+/* resolve hostname to IP literal; IPv4 and bracketed IPv6 literals pass through */
+static std::string resolve_address(const std::string &addr)
+{
+    if (validate_ipv4(addr) || validate_ipv6(addr)) {
+        return addr;
+    }
+
+    struct addrinfo hints = {};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    struct addrinfo *result;
+    int rc = getaddrinfo(addr.c_str(), nullptr, &hints, &result);
+    if (rc != 0) {
+        log_error("Could not resolve hostname '%s': %s", addr.c_str(), gai_strerror(rc));
+        return {};
+    }
+
+    char buf[INET6_ADDRSTRLEN];
+    std::string resolved;
+    if (result->ai_family == AF_INET) {
+        auto *sa = (struct sockaddr_in *)result->ai_addr;
+        inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof(buf));
+        resolved = buf;
+    } else {
+        auto *sa6 = (struct sockaddr_in6 *)result->ai_addr;
+        inet_ntop(AF_INET6, &sa6->sin6_addr, buf, sizeof(buf));
+        resolved = "[" + std::string(buf) + "]";
+    }
+    freeaddrinfo(result);
+
+    log_info("Resolved '%s' to %s", addr.c_str(), resolved.c_str());
+    return resolved;
 }
 
 static unsigned int ipv6_get_scope_id(const char *ip)
@@ -1225,13 +1268,18 @@ bool UdpEndpoint::open(const char *ip, unsigned long port, UdpEndpointConfig::Mo
 {
     const int broadcast_val = 1;
 
-    this->is_ipv6 = ip_str_is_ipv6(ip);
+    std::string resolved = resolve_address(ip);
+    if (resolved.empty()) {
+        return false;
+    }
+
+    this->is_ipv6 = ip_str_is_ipv6(resolved.c_str());
 
     // setup the special IPv6/IPv4 part
     if (this->is_ipv6) {
-        open_ipv6(ip, port, mode);
+        open_ipv6(resolved.c_str(), port, mode);
     } else {
-        open_ipv4(ip, port, mode);
+        open_ipv4(resolved.c_str(), port, mode);
     }
 
     if (fd < 0) {
@@ -1605,17 +1653,22 @@ int TcpEndpoint::open_ipv4(const char *ip, unsigned long port, sockaddr_in &sock
 
 bool TcpEndpoint::open(const std::string &ip, unsigned long port)
 {
-    this->is_ipv6 = ip_str_is_ipv6(ip.c_str());
+    std::string resolved = resolve_address(ip);
+    if (resolved.empty()) {
+        return false;
+    }
+
+    this->is_ipv6 = ip_str_is_ipv6(resolved.c_str());
 
     // setup the special IPv6/IPv4 part
     struct sockaddr *sock;
     socklen_t addrlen;
     if (this->is_ipv6) {
-        fd = open_ipv6(ip.c_str(), port, this->sockaddr6);
+        fd = open_ipv6(resolved.c_str(), port, this->sockaddr6);
         sock = (struct sockaddr *)&this->sockaddr6;
         addrlen = sizeof(sockaddr6);
     } else {
-        fd = open_ipv4(ip.c_str(), port, this->sockaddr);
+        fd = open_ipv4(resolved.c_str(), port, this->sockaddr);
         sock = (struct sockaddr *)&this->sockaddr;
         addrlen = sizeof(sockaddr);
     }

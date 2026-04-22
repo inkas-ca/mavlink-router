@@ -214,7 +214,7 @@ Baud = 52000
 # Mandatory, no default value
 #Mode = 
 
-# Binding or target IP address (depending on mode).
+# Binding or target address (depending on mode). Can be an IP or a hostname.
 # IPv6 addresses must be encosed in square brackets like `[::1]`.
 # Binding to `0.0.0.0` or `[::]` will listen on all interfaces.
 # Mandatory, no default value
@@ -250,7 +250,7 @@ Port = 11000
 
 #[TcpEndpoint $name]
 
-# Server IP address to connect to.
+# Server address to connect to. Can be an IP or a hostname.
 # IPv6 addresses must be encosed in square brackets like `[::1]`.
 # Mandatory, no default value
 #Address = 
